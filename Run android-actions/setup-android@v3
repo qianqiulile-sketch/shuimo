@@ -1,0 +1,74 @@
+name: Android 打包
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 安装 SDK 平台 36
+        run: |
+          yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager \
+            "platforms;android-36" \
+            "build-tools;36.0.0" \
+            "platform-tools"
+
+      - name: 赋予 gradlew 执行权限
+        run: chmod +x gradlew
+
+      - name: 打包 Debug APK
+        id: full
+        continue-on-error: true
+        run: ./gradlew --no-daemon --stacktrace assembleDebug -Pdia.localImageGen=true
+
+      - name: 打包 Debug APK（不含生图，备用）
+        id: lite
+        if: steps.full.outcome == 'failure'
+        run: ./gradlew --no-daemon --stacktrace clean assembleDebug -Pdia.localImageGen=false
+
+      - name: 打包 Release APK
+        id: release
+        continue-on-error: true
+        run: ./gradlew --no-daemon assembleRelease -Pdia.localImageGen=${{ steps.full.outcome == 'success' }}
+
+      - name: 整理 APK 文件名
+        run: |
+          mkdir -p out
+          TAG="${GITHUB_REF_NAME//\//-}-${GITHUB_SHA::7}"
+          cp app/build/outputs/apk/debug/app-debug.apk "out/LingXi-Dia-4.0-debug-$TAG.apk"
+          if [ -f app/build/outputs/apk/release/app-release.apk ]; then
+            cp app/build/outputs/apk/release/app-release.apk "out/LingXi-Dia-4.0-release-$TAG.apk"
+          fi
+
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LingXi-Dia-apk
+          path: out/*.apk
+          if-no-files-found: error
+
+      - name: 发布 Release（仅标签）
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: out/*.apk
+          generate_release_notes: true
